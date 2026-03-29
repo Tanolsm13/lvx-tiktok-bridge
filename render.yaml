@@ -1,0 +1,12 @@
+# Render configuration
+services:
+  - type: web
+    name: lvx-tiktok-bridge
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
