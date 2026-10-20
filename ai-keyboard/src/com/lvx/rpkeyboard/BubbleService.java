@@ -125,7 +125,12 @@ public class BubbleService extends Service implements Bus.Listener {
                 .setOngoing(true)
                 .addAction(new Notification.Action.Builder(null, "Fermer", stop).build())
                 .build();
-        startForeground(NOTIF_ID, n);
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIF_ID, n,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        } else {
+            startForeground(NOTIF_ID, n);
+        }
     }
 
     // ---------------------------------------------------------------- bulle

@@ -75,12 +75,19 @@ if [ ! -f "debug.jks" ]; then
     -keyalg RSA -keysize 2048 -validity 10950 \
     -dname "CN=Clavier RP, OU=perso, O=perso, C=FR" >/dev/null 2>&1
 fi
+# Les trois schemas sont forces. Avec --min-sdk-version 29 seul, apksigner
+# omet v1 et v2 : l'APK s'installe alors sur Android de base mais pas sur les
+# installeurs qui exigent encore la signature JAR, MIUI/HyperOS notamment,
+# qui repond « probleme lors de l'analyse du package ».
 apksigner sign \
   --ks "debug.jks" \
   --ks-pass pass:android \
   --key-pass pass:android \
   --ks-key-alias clavierrp \
   --min-sdk-version "$MIN_SDK" \
+  --v1-signing-enabled true \
+  --v2-signing-enabled true \
+  --v3-signing-enabled true \
   --out "$APK" \
   "$OUT/aligned.apk"
 
