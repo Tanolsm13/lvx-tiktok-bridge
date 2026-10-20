@@ -180,8 +180,7 @@ public class CaptureService extends Service {
 
                     Settings s = Settings.get(CaptureService.this);
                     PromptBuilder.Config cfg = s.config(oneShot);
-                    LlmClient client = new LlmClient(
-                            s.provider(), s.baseUrl(), s.apiKey(), s.model())
+                    LlmClient client = new LlmClient(s.apiKey(), s.model())
                             .withMaxTokens(s.maxTokens());
                     ConversationLog log = s.loadLog(threadKey);
 

@@ -45,7 +45,8 @@ import com.lvx.rpkeyboard.ime.EmojiData;
 import com.lvx.rpkeyboard.ime.Keys;
 import com.lvx.rpkeyboard.ime.Theme;
 import com.lvx.rpkeyboard.imagegen.ImageClient;
-import com.lvx.rpkeyboard.voice.ElevenLabsClient;
+import com.lvx.rpkeyboard.ai.WaveSpeed;
+import com.lvx.rpkeyboard.voice.VoiceClient;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -628,7 +629,7 @@ public class RpKeyboardService extends InputMethodService implements Bus.Listene
     private void makeVoice() {
         final Settings s = Settings.get(this);
         if (!s.voiceReady()) {
-            onError("Réglages : charge tes voix ElevenLabs et choisis-en une");
+            onError("Réglages : renseigne l'identifiant de voix");
             return;
         }
         final String text = fieldText();
@@ -641,9 +642,9 @@ public class RpKeyboardService extends InputMethodService implements Bus.Listene
             @Override
             public void run() {
                 try {
-                    File mp3 = new ElevenLabsClient(s.elevenKey(), s.elevenVoice(),
-                            s.elevenModel())
-                            .synthesize(text, Share.outDir(RpKeyboardService.this));
+                    File mp3 = new VoiceClient(s.apiKey(), s.voiceModel(), s.voiceId())
+                            .synthesize(text, Share.outDir(RpKeyboardService.this),
+                                    waitNotice("Vocal"));
                     Uri uri = Share.publishAudio(RpKeyboardService.this, mp3);
                     onStatus("Vocal prêt : choisis l'app");
                     Share.send(RpKeyboardService.this, uri, "audio/mpeg", "Envoyer le vocal");
@@ -670,8 +671,10 @@ public class RpKeyboardService extends InputMethodService implements Bus.Listene
             @Override
             public void run() {
                 try {
-                    File png = new ImageClient(s.imageUrl(), s.imageKey(), s.imageModel())
-                            .generate(prompt, "1024x1024", Share.outDir(RpKeyboardService.this));
+                    File png = new ImageClient(s.apiKey(), s.imageModel())
+                            .generate(prompt, "1024*1024",
+                                    Share.outDir(RpKeyboardService.this),
+                                    waitNotice("Image"));
                     Uri uri = Share.publishImage(RpKeyboardService.this, png);
                     onStatus("Image prête : choisis l'app");
                     Share.send(RpKeyboardService.this, uri, "image/png", "Envoyer l'image");
@@ -680,6 +683,16 @@ public class RpKeyboardService extends InputMethodService implements Bus.Listene
                 }
             }
         }).start();
+    }
+
+    /** Les taches image et vocal se font en plusieurs secondes : on le dit. */
+    private WaveSpeed.Progress waitNotice(final String what) {
+        return new WaveSpeed.Progress() {
+            @Override
+            public void onWait(long elapsedMs) {
+                onStatus(what + " en cours... " + (elapsedMs / 1000) + " s");
+            }
+        };
     }
 
     private static String msg(Exception e) {

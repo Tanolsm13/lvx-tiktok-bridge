@@ -5,14 +5,15 @@ import android.content.SharedPreferences;
 
 import com.lvx.rpkeyboard.ai.ConversationLog;
 import com.lvx.rpkeyboard.ai.PromptBuilder;
-import com.lvx.rpkeyboard.ai.Provider;
+import com.lvx.rpkeyboard.ai.WaveSpeed;
+import com.lvx.rpkeyboard.ime.Theme;
 
 /**
  * Reglages de l'app.
  *
- * La cle WaveSpeed est injectee a la compilation ({@link #BUILTIN_KEY}) pour que
- * l'app fonctionne des l'installation, sans rien saisir. Toute cle saisie dans
- * les reglages prend le dessus.
+ * Un seul fournisseur, WaveSpeed, qui porte le texte, les images et le vocal :
+ * il n'y a donc qu'une cle, injectee a la compilation pour que l'app marche des
+ * l'installation. Une cle saisie dans les reglages prend le dessus.
  */
 public final class Settings {
 
@@ -41,50 +42,70 @@ public final class Settings {
         return !BUILTIN_KEY.startsWith("@");
     }
 
-    // ---------------------------------------------------------- fournisseur
+    // ------------------------------------------------------------------ cle
 
-    public Provider provider() {
-        return Provider.from(sp.getString("provider", Provider.WAVESPEED.name()));
-    }
-
-    public void setProvider(Provider p) {
-        sp.edit().putString("provider", p.name()).apply();
-    }
-
-    public String model() {
-        String m = sp.getString("model_" + provider().name(), "");
-        return m.isEmpty() ? provider().defaultModel : m;
-    }
-
-    public void setModel(String model) {
-        sp.edit().putString("model_" + provider().name(), model == null ? "" : model.trim()).apply();
-    }
-
-    /** URL personnalisee ; vide = URL par defaut du fournisseur. */
-    public String baseUrl() {
-        return sp.getString("url_" + provider().name(), "");
-    }
-
-    public void setBaseUrl(String url) {
-        sp.edit().putString("url_" + provider().name(), url == null ? "" : url.trim()).apply();
-    }
-
-    /** Cle du fournisseur courant : celle saisie, sinon celle du build. */
+    /** La cle saisie, sinon celle du build. */
     public String apiKey() {
-        String saved = sp.getString("key_" + provider().name(), "");
-        if (!saved.isEmpty()) {
-            return saved;
-        }
-        return (provider() == Provider.WAVESPEED && hasBuiltinKey()) ? BUILTIN_KEY : "";
+        String saved = sp.getString("ws_key", "");
+        return saved.isEmpty() ? (hasBuiltinKey() ? BUILTIN_KEY : "") : saved;
     }
 
     public void setApiKey(String key) {
-        sp.edit().putString("key_" + provider().name(), key == null ? "" : key.trim()).apply();
+        sp.edit().putString("ws_key", key == null ? "" : key.trim()).apply();
     }
 
     public boolean usesBuiltinKey() {
-        return sp.getString("key_" + provider().name(), "").isEmpty()
-                && provider() == Provider.WAVESPEED && hasBuiltinKey();
+        return sp.getString("ws_key", "").isEmpty() && hasBuiltinKey();
+    }
+
+    // --------------------------------------------------------------- modeles
+
+    public String model() {
+        String m = sp.getString("llm_model", "");
+        return m.isEmpty() ? WaveSpeed.DEFAULT_LLM_MODEL : m;
+    }
+
+    public void setModel(String model) {
+        sp.edit().putString("llm_model", model == null ? "" : model.trim()).apply();
+    }
+
+    public String imageModel() {
+        String m = sp.getString("img_model", "");
+        return m.isEmpty() ? WaveSpeed.DEFAULT_IMAGE_MODEL : m;
+    }
+
+    public String voiceModel() {
+        String m = sp.getString("voice_model", "");
+        return m.isEmpty() ? WaveSpeed.DEFAULT_VOICE_MODEL : m;
+    }
+
+    public String voiceId() {
+        return sp.getString("voice_id", "");
+    }
+
+    public void saveMedia(String imageModel, String voiceModel, String voiceId) {
+        sp.edit()
+                .putString("img_model", nz(imageModel))
+                .putString("voice_model", nz(voiceModel))
+                .putString("voice_id", nz(voiceId))
+                .apply();
+    }
+
+    public boolean voiceReady() {
+        return !apiKey().isEmpty() && !voiceId().isEmpty();
+    }
+
+    public boolean imageReady() {
+        return !apiKey().isEmpty();
+    }
+
+    /** Longueur maximale de la reponse du modele, en tokens. */
+    public int maxTokens() {
+        return Math.max(256, Math.min(16_000, sp.getInt("max_tokens", 4000)));
+    }
+
+    public void setMaxTokens(int tokens) {
+        sp.edit().putInt("max_tokens", Math.max(256, Math.min(16_000, tokens))).apply();
     }
 
     // ----------------------------------------------------------------- mode
@@ -158,22 +179,13 @@ public final class Settings {
         return c;
     }
 
+    // ------------------------------------------------------------- apparence
 
-
-    /** Longueur maximale de la reponse du modele, en tokens. */
-    public int maxTokens() {
-        return Math.max(256, Math.min(16_000, sp.getInt("max_tokens", 4000)));
+    public Theme theme() {
+        return Theme.from(sp.getString("theme", "NUIT"));
     }
 
-    public void setMaxTokens(int tokens) {
-        sp.edit().putInt("max_tokens", Math.max(256, Math.min(16_000, tokens))).apply();
-    }
-
-    public com.lvx.rpkeyboard.ime.Theme theme() {
-        return com.lvx.rpkeyboard.ime.Theme.from(sp.getString("theme", "NUIT"));
-    }
-
-    public void setTheme(com.lvx.rpkeyboard.ime.Theme t) {
+    public void setTheme(Theme t) {
         sp.edit().putString("theme", t.name()).apply();
     }
 
@@ -184,8 +196,6 @@ public final class Settings {
     public void setHaptics(boolean on) {
         sp.edit().putBoolean("haptics", on).apply();
     }
-
-    // ------------------------------------------------------------- apparence
 
     /** Chemin d'une image de fond du clavier, vide = fond uni. */
     public String background() {
@@ -213,100 +223,9 @@ public final class Settings {
         sp.edit().putBoolean("anim", on).apply();
     }
 
-    // ----------------------------------------------------------------- vocal
-
-    public String elevenKey() {
-        return sp.getString("eleven_key", "");
-    }
-
-    public String elevenVoice() {
-        return sp.getString("eleven_voice", "");
-    }
-
-    public String elevenModel() {
-        return sp.getString("eleven_model", "");
-    }
-
-    public void saveVoice(String key, String voiceId, String model) {
-        sp.edit()
-                .putString("eleven_key", nz(key))
-                .putString("eleven_voice", nz(voiceId))
-                .putString("eleven_model", nz(model))
-                .apply();
-    }
-
-    public boolean voiceReady() {
-        return !elevenKey().isEmpty() && !elevenVoice().isEmpty();
-    }
-
-    // ----------------------------------------------------------------- image
-
-    public String imageKey() {
-        return sp.getString("img_key", "");
-    }
-
-    public String imageUrl() {
-        return sp.getString("img_url", "");
-    }
-
-    public String imageModel() {
-        return sp.getString("img_model", "");
-    }
-
-    public void saveImage(String key, String url, String model) {
-        sp.edit()
-                .putString("img_key", nz(key))
-                .putString("img_url", nz(url))
-                .putString("img_model", nz(model))
-                .apply();
-    }
-
-    public boolean imageReady() {
-        return !imageKey().isEmpty();
-    }
-
-    // ------------------------------------------------------------- mode auto
-
-    public boolean autoAllowed() {
-        return sp.getBoolean("auto_allowed", false);
-    }
-
-    public void setAutoAllowed(boolean on) {
-        sp.edit().putBoolean("auto_allowed", on).apply();
-    }
-
-    public String autoDisclosure() {
-        return sp.getString("auto_disclosure", "");
-    }
-
-    public int autoMaxMessages() {
-        return Math.max(1, Math.min(50, sp.getInt("auto_max", 10)));
-    }
-
-    public int autoMinutes() {
-        return Math.max(1, Math.min(120, sp.getInt("auto_minutes", 15)));
-    }
-
-    /** Seuil de secousse, en g. */
-    public float shakeG() {
-        return sp.getFloat("shake_g", 2.8f);
-    }
-
-    public void saveAuto(String disclosure, int maxMessages, int minutes, float shakeG) {
-        sp.edit()
-                .putString("auto_disclosure", nz(disclosure))
-                .putInt("auto_max", Math.max(1, Math.min(50, maxMessages)))
-                .putInt("auto_minutes", Math.max(1, Math.min(120, minutes)))
-                .putFloat("shake_g", Math.max(1.5f, Math.min(6f, shakeG)))
-                .apply();
-    }
-
     // --------------------------------------------------------------- contexte
 
-    /**
-     * Fenetre de contexte du modele, en tokens. Sert a calculer le budget de
-     * compactage pour ne jamais s'en approcher.
-     */
+    /** Fenetre de contexte du modele, en tokens. */
     public int contextWindow() {
         return Math.max(8_000, sp.getInt("ctx_window", 200_000));
     }
@@ -327,8 +246,7 @@ public final class Settings {
     /**
      * Budget de compactage en caracteres, deduit de la fenetre du modele.
      * On compte ~4 caracteres par token, et on ne prend qu'une fraction de la
-     * fenetre : l'historique n'est pas la seule chose a y tenir, et chaque
-     * token envoye est facture.
+     * fenetre : l'historique n'est pas seul a y tenir, et chaque token se paie.
      */
     public int contextBudgetChars() {
         long tokens = (long) contextWindow() * contextShare() / 100L;
