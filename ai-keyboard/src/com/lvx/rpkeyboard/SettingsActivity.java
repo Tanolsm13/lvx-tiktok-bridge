@@ -59,6 +59,20 @@ public class SettingsActivity extends Activity {
     private CheckBox roleplayBox;
     private TextView pingResult;
     private TextView keyHint;
+    private TextView bgHint;
+    private EditText scrimField;
+    private CheckBox animBox;
+    private EditText elevenKeyField;
+    private EditText elevenVoiceField;
+    private EditText elevenModelField;
+    private EditText imgKeyField;
+    private EditText imgUrlField;
+    private EditText imgModelField;
+    private EditText ctxWindowField;
+    private EditText ctxShareField;
+    private TextView ctxHint;
+
+    private static final int PICK_BG = 9001;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -202,6 +216,97 @@ public class SettingsActivity extends Activity {
         countField.setInputType(InputType.TYPE_CLASS_NUMBER);
         col.addView(countField);
 
+
+        // --- apparence ---------------------------------------------------
+        col.addView(spacer(dp(22)));
+        col.addView(label("Apparence du clavier"));
+        col.addView(action("Choisir une image de fond", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                pickBackground();
+            }
+        }));
+        col.addView(action("Retirer l'image de fond", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                cfg.setBackground("");
+                refreshBgHint();
+                Toast.makeText(SettingsActivity.this, "Fond retire", Toast.LENGTH_SHORT).show();
+            }
+        }));
+        bgHint = hint("");
+        col.addView(bgHint);
+
+        col.addView(spacer(dp(12)));
+        col.addView(label("Voile sur l'image (0 a 100)"));
+        scrimField = field(String.valueOf(cfg.scrim()), "62", 1);
+        scrimField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        col.addView(scrimField);
+        col.addView(hint("Plus la valeur est haute, plus l'image est assombrie et les "
+                + "touches lisibles."));
+
+        col.addView(spacer(dp(12)));
+        animBox = new CheckBox(this);
+        animBox.setText("Animations des touches");
+        animBox.setTextColor(Color.parseColor(LABEL));
+        animBox.setChecked(cfg.animations());
+        col.addView(animBox);
+        col.addView(hint("Enfoncement, apercu au-dessus de la touche, apparition des "
+                + "propositions. Les accents restent accessibles en appui long."));
+
+        // --- vocal --------------------------------------------------------
+        col.addView(spacer(dp(22)));
+        col.addView(label("Vocal ElevenLabs"));
+        col.addView(hint("Le bouton micro synthetise le texte du champ et ouvre le "
+                + "partage du fichier audio. Android ne permet pas d'injecter du son "
+                + "dans le micro d'une autre app : un vrai fichier joint donne une "
+                + "qualite parfaite, un enregistrement du haut-parleur non."));
+        elevenKeyField = field(cfg.elevenKey(), "cle ElevenLabs", 1);
+        elevenKeyField.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        col.addView(elevenKeyField);
+        col.addView(spacer(dp(8)));
+        elevenVoiceField = field(cfg.elevenVoice(), "identifiant de la voix", 1);
+        col.addView(elevenVoiceField);
+        col.addView(spacer(dp(8)));
+        elevenModelField = field(cfg.elevenModel(),
+                com.lvx.rpkeyboard.voice.ElevenLabsClient.DEFAULT_MODEL, 1);
+        col.addView(elevenModelField);
+        col.addView(hint("Identifiant de modele libre : colle celui que ton compte "
+                + "propose. Le mode automatique n'utilise jamais le vocal."));
+
+        // --- image --------------------------------------------------------
+        col.addView(spacer(dp(22)));
+        col.addView(label("Generation d'images"));
+        imgKeyField = field(cfg.imageKey(), "cle image", 1);
+        imgKeyField.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        col.addView(imgKeyField);
+        col.addView(spacer(dp(8)));
+        imgUrlField = field(cfg.imageUrl(),
+                com.lvx.rpkeyboard.imagegen.ImageClient.DEFAULT_URL, 1);
+        col.addView(imgUrlField);
+        col.addView(spacer(dp(8)));
+        imgModelField = field(cfg.imageModel(),
+                com.lvx.rpkeyboard.imagegen.ImageClient.DEFAULT_MODEL, 1);
+        col.addView(imgModelField);
+        col.addView(hint("Le bouton image prend le texte du champ comme description."));
+
+        // --- contexte -----------------------------------------------------
+        col.addView(spacer(dp(22)));
+        col.addView(label("Fenetre de contexte du modele (tokens)"));
+        ctxWindowField = field(String.valueOf(cfg.contextWindow()), "200000", 1);
+        ctxWindowField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        col.addView(ctxWindowField);
+
+        col.addView(spacer(dp(8)));
+        col.addView(label("Part utilisee pour l'historique (%)"));
+        ctxShareField = field(String.valueOf(cfg.contextShare()), "8", 1);
+        ctxShareField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        col.addView(ctxShareField);
+        ctxHint = hint("");
+        col.addView(ctxHint);
+
         // --- actions ----------------------------------------------------
         col.addView(spacer(dp(22)));
         col.addView(primary("Enregistrer", new View.OnClickListener() {
@@ -232,6 +337,8 @@ public class SettingsActivity extends Activity {
 
         setContentView(scroll);
         reloadProviderFields();
+        refreshBgHint();
+        refreshCtxHint();
     }
 
     private void reloadProviderFields() {
@@ -268,6 +375,79 @@ public class SettingsActivity extends Activity {
                 universeField.getText().toString(),
                 styleField.getText().toString(),
                 count);
+
+        cfg.setScrim(intOf(scrimField, 62));
+        cfg.setAnimations(animBox.isChecked());
+        cfg.saveVoice(elevenKeyField.getText().toString(),
+                elevenVoiceField.getText().toString(),
+                elevenModelField.getText().toString());
+        cfg.saveImage(imgKeyField.getText().toString(),
+                imgUrlField.getText().toString(),
+                imgModelField.getText().toString());
+        cfg.setContextWindow(intOf(ctxWindowField, 200_000));
+        cfg.setContextShare(intOf(ctxShareField, 8));
+        refreshCtxHint();
+    }
+
+    private static int intOf(EditText f, int fallback) {
+        try {
+            return Integer.parseInt(f.getText().toString().trim());
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    private void refreshBgHint() {
+        String path = cfg.background();
+        bgHint.setText(path.isEmpty()
+                ? "Aucune image : fond uni."
+                : "Image active.");
+    }
+
+    private void refreshCtxHint() {
+        int chars = cfg.contextBudgetChars();
+        ctxHint.setText("Budget d'historique : environ " + (chars / 4) + " tokens ("
+                + chars + " caracteres). Au-dela, les anciens messages sont resumes "
+                + "localement, sans appel paye.");
+    }
+
+    private void pickBackground() {
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .setType("image/*")
+                .addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(pick, PICK_BG);
+    }
+
+    @Override
+    protected void onActivityResult(int req, int code, Intent data) {
+        super.onActivityResult(req, code, data);
+        if (req != PICK_BG || code != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        try {
+            java.io.InputStream in = getContentResolver().openInputStream(data.getData());
+            if (in == null) {
+                throw new Exception("image illisible");
+            }
+            java.io.File out = new java.io.File(getFilesDir(), "fond.img");
+            java.io.OutputStream os = new java.io.FileOutputStream(out);
+            try {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    os.write(buf, 0, n);
+                }
+                os.flush();
+            } finally {
+                in.close();
+                os.close();
+            }
+            cfg.setBackground(out.getAbsolutePath());
+            refreshBgHint();
+            Toast.makeText(this, "Fond enregistre", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Echec : " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void ping() {

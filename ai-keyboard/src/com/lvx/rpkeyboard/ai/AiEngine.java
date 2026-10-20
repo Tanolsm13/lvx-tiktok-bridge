@@ -40,14 +40,25 @@ public final class AiEngine {
     private final LlmClient client;
     private final PromptBuilder.Config config;
 
+    /** Budget de compactage en caracteres, deduit de la fenetre du modele. */
+    private int budget = ContextCompactor.DEFAULT_BUDGET;
+
     public AiEngine(LlmClient client, PromptBuilder.Config config) {
         this.client = client;
         this.config = config;
     }
 
+    public AiEngine withBudget(int chars) {
+        if (chars > 0) {
+            this.budget = chars;
+        }
+        return this;
+    }
+
     /** Depuis un historique lu en texte. */
     public Result fromHistory(List<ChatMessage> history) {
-        ContextCompactor.Result ctx = ContextCompactor.compact(history);
+        ContextCompactor.Result ctx = ContextCompactor.compact(
+                history, budget, ContextCompactor.KEEP_VERBATIM);
         return run(PromptBuilder.system(config), PromptBuilder.user(config, ctx), null);
     }
 
@@ -58,7 +69,8 @@ public final class AiEngine {
 
     /** Historique connu ET capture : le modele a les deux. */
     public Result fromBoth(List<ChatMessage> history, byte[] jpeg) {
-        ContextCompactor.Result ctx = ContextCompactor.compact(history);
+        ContextCompactor.Result ctx = ContextCompactor.compact(
+                history, budget, ContextCompactor.KEEP_VERBATIM);
         return run(PromptBuilder.system(config), PromptBuilder.user(config, ctx), jpeg);
     }
 

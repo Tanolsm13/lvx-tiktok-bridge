@@ -184,7 +184,8 @@ public class CaptureService extends Service {
                             s.provider(), s.baseUrl(), s.apiKey(), s.model());
                     ConversationLog log = s.loadLog(threadKey);
 
-                    AiEngine engine = new AiEngine(client, cfg);
+                    AiEngine engine = new AiEngine(client, cfg)
+                            .withBudget(s.contextBudgetChars());
                     AiEngine.Result result = log.isEmpty()
                             ? engine.fromScreenshot(jpeg)
                             : engine.fromBoth(log.items(), jpeg);
