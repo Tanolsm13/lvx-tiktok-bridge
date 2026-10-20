@@ -112,10 +112,16 @@ public final class AiEngine {
         return run(PromptBuilder.system(config), PromptBuilder.userVision(config), jpeg);
     }
 
-    /** Historique connu ET capture : le modele a les deux. */
+    /**
+     * Historique connu ET capture : le modele a les deux.
+     *
+     * L'image occupe elle aussi la fenetre de contexte, donc on retire sa part
+     * du budget de l'historique plutot que de l'ignorer.
+     */
     public Result fromBoth(List<ChatMessage> history, byte[] jpeg) {
         ContextCompactor.Result ctx = ContextCompactor.compact(
-                history, budget, ContextCompactor.KEEP_VERBATIM);
+                history, ContextCompactor.budgetWithImage(budget),
+                ContextCompactor.KEEP_VERBATIM);
         return run(PromptBuilder.system(config), PromptBuilder.user(config, ctx), jpeg);
     }
 
