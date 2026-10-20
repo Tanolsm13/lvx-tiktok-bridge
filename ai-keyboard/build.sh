@@ -67,16 +67,16 @@ cp "$OUT/base.apk" "$OUT/unaligned.apk"
 zipalign -f 4 "$OUT/unaligned.apk" "$OUT/aligned.apk"
 
 echo "[7/7] signature"
-if [ ! -f "$OUT/debug.jks" ]; then
+if [ ! -f "debug.jks" ]; then
   keytool -genkeypair -v \
-    -keystore "$OUT/debug.jks" \
+    -keystore "debug.jks" \
     -storepass android -keypass android \
     -alias clavierrp \
     -keyalg RSA -keysize 2048 -validity 10950 \
     -dname "CN=Clavier RP, OU=perso, O=perso, C=FR" >/dev/null 2>&1
 fi
 apksigner sign \
-  --ks "$OUT/debug.jks" \
+  --ks "debug.jks" \
   --ks-pass pass:android \
   --key-pass pass:android \
   --ks-key-alias clavierrp \

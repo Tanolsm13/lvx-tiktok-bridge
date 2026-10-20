@@ -13,6 +13,10 @@ public class CaptureActivity extends Activity {
 
     private static final int REQ = 7001;
 
+    /** Consigne ponctuelle et fil en cours, poses par le clavier avant le lancement. */
+    public static String pendingOneShot = "";
+    public static String pendingThread = "default";
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -42,7 +46,9 @@ public class CaptureActivity extends Activity {
         Intent svc = new Intent(this, CaptureService.class)
                 .setAction(CaptureService.ACTION_INIT)
                 .putExtra(CaptureService.EXTRA_RESULT_CODE, resultCode)
-                .putExtra(CaptureService.EXTRA_RESULT_DATA, data);
+                .putExtra(CaptureService.EXTRA_RESULT_DATA, data)
+                .putExtra(CaptureService.EXTRA_ONE_SHOT, pendingOneShot)
+                .putExtra(CaptureService.EXTRA_THREAD, pendingThread);
         startForegroundService(svc);
         finish();
     }

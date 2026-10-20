@@ -22,9 +22,14 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.util.DisplayMetrics;
 
+import com.lvx.rpkeyboard.ai.AiEngine;
+import com.lvx.rpkeyboard.ai.ConversationLog;
+import com.lvx.rpkeyboard.ai.LlmClient;
+import com.lvx.rpkeyboard.ai.PromptBuilder;
+import com.lvx.rpkeyboard.data.Settings;
+
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
-import java.util.List;
 
 /**
  * Detient le jeton de capture pour la session et prend une image unique
@@ -38,6 +43,8 @@ public class CaptureService extends Service {
 
     public static final String EXTRA_RESULT_CODE = "code";
     public static final String EXTRA_RESULT_DATA = "data";
+    public static final String EXTRA_ONE_SHOT = "oneShot";
+    public static final String EXTRA_THREAD = "thread";
 
     private static final String CHANNEL = "capture";
     private static final int NOTIF_ID = 42;
@@ -74,18 +81,21 @@ public class CaptureService extends Service {
 
         startForegroundNotification();
 
+        String oneShot = intent == null ? "" : intent.getStringExtra(EXTRA_ONE_SHOT);
+        String threadKey = intent == null ? null : intent.getStringExtra(EXTRA_THREAD);
+
         if (ACTION_INIT.equals(action)) {
             int code = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
             Intent data = intent.getParcelableExtra(EXTRA_RESULT_DATA);
             if (!openProjection(code, data)) {
                 return START_NOT_STICKY;
             }
-            capture();
+            capture(oneShot, threadKey);
         } else if (ACTION_CAPTURE.equals(action)) {
             if (projection == null) {
                 Bus.error("Session de capture expiree, reappuie sur le bouton");
             } else {
-                capture();
+                capture(oneShot, threadKey);
             }
         }
         return START_NOT_STICKY;
@@ -115,8 +125,7 @@ public class CaptureService extends Service {
                 .setContentText("Lecture d'ecran active pour cette session")
                 .setSmallIcon(android.R.drawable.ic_menu_edit)
                 .setOngoing(true)
-                .addAction(new Notification.Action.Builder(
-                        null, "Arreter", stop).build())
+                .addAction(new Notification.Action.Builder(null, "Arreter", stop).build())
                 .build();
 
         if (Build.VERSION.SDK_INT >= 34) {
@@ -156,7 +165,7 @@ public class CaptureService extends Service {
         return true;
     }
 
-    private void capture() {
+    private void capture(final String oneShot, final String threadKey) {
         if (busy) {
             return;
         }
@@ -168,12 +177,22 @@ public class CaptureService extends Service {
                 try {
                     byte[] jpeg = grabFrame();
                     Bus.status("L'IA ecrit...");
-                    List<String> replies =
-                            new WaveSpeedClient(new Prefs(CaptureService.this)).suggest(jpeg);
-                    if (replies.isEmpty()) {
-                        Bus.error("Aucune proposition recue");
+
+                    Settings s = Settings.get(CaptureService.this);
+                    PromptBuilder.Config cfg = s.config(oneShot);
+                    LlmClient client = new LlmClient(
+                            s.provider(), s.baseUrl(), s.apiKey(), s.model());
+                    ConversationLog log = s.loadLog(threadKey);
+
+                    AiEngine engine = new AiEngine(client, cfg);
+                    AiEngine.Result result = log.isEmpty()
+                            ? engine.fromScreenshot(jpeg)
+                            : engine.fromBoth(log.items(), jpeg);
+
+                    if (result.isOk()) {
+                        Bus.suggestions(result.variants);
                     } else {
-                        Bus.suggestions(replies);
+                        Bus.error(result.error);
                     }
                 } catch (Exception e) {
                     Bus.error(e.getMessage() == null ? e.toString() : e.getMessage());
