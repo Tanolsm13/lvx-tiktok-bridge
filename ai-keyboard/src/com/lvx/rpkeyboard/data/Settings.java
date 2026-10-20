@@ -159,6 +159,32 @@ public final class Settings {
     }
 
 
+
+    /** Longueur maximale de la reponse du modele, en tokens. */
+    public int maxTokens() {
+        return Math.max(256, Math.min(16_000, sp.getInt("max_tokens", 4000)));
+    }
+
+    public void setMaxTokens(int tokens) {
+        sp.edit().putInt("max_tokens", Math.max(256, Math.min(16_000, tokens))).apply();
+    }
+
+    public com.lvx.rpkeyboard.ime.Theme theme() {
+        return com.lvx.rpkeyboard.ime.Theme.from(sp.getString("theme", "NUIT"));
+    }
+
+    public void setTheme(com.lvx.rpkeyboard.ime.Theme t) {
+        sp.edit().putString("theme", t.name()).apply();
+    }
+
+    public boolean haptics() {
+        return sp.getBoolean("haptics", true);
+    }
+
+    public void setHaptics(boolean on) {
+        sp.edit().putBoolean("haptics", on).apply();
+    }
+
     // ------------------------------------------------------------- apparence
 
     /** Chemin d'une image de fond du clavier, vide = fond uni. */

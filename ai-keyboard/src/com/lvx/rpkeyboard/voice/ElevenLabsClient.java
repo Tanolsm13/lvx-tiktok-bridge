@@ -71,6 +71,74 @@ public final class ElevenLabsClient {
         return out;
     }
 
+
+    /** Une voix du compte. */
+    public static final class Voice {
+        public final String id;
+        public final String name;
+
+        Voice(String id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        @Override
+        public String toString() {
+            return name;
+        }
+    }
+
+    /**
+     * Liste les voix du compte.
+     *
+     * Personne ne connait son identifiant de voix par coeur : sans cette
+     * liste, le champ reste vide et le bouton micro ne sert a rien.
+     */
+    public static java.util.List<Voice> listVoices(String apiKey) throws Exception {
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            throw new Exception("cle ElevenLabs manquante");
+        }
+        HttpURLConnection conn =
+                (HttpURLConnection) new URL("https://api.elevenlabs.io/v1/voices").openConnection();
+        try {
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(20_000);
+            conn.setReadTimeout(60_000);
+            conn.setRequestProperty("xi-api-key", apiKey.trim());
+            conn.setRequestProperty("Accept", "application/json");
+
+            int code = conn.getResponseCode();
+            boolean fine = code >= 200 && code < 300;
+            String text = new String(
+                    readAll(fine ? conn.getInputStream() : conn.getErrorStream()), "UTF-8");
+            if (!fine) {
+                throw new Exception("ElevenLabs HTTP " + code + " : " + shorten(text));
+            }
+
+            org.json.JSONArray arr = new org.json.JSONObject(text).optJSONArray("voices");
+            java.util.List<Voice> out = new java.util.ArrayList<Voice>();
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) {
+                    org.json.JSONObject v = arr.optJSONObject(i);
+                    if (v == null) {
+                        continue;
+                    }
+                    String id = v.optString("voice_id", "");
+                    String name = v.optString("name", id);
+                    if (!id.isEmpty()) {
+                        out.add(new Voice(id, name));
+                    }
+                }
+            }
+            if (out.isEmpty()) {
+                throw new Exception("aucune voix sur ce compte");
+            }
+            return out;
+        } finally {
+            conn.disconnect();
+        }
+    }
+
     private byte[] request(String text) throws Exception {
         JSONObject voiceSettings = new JSONObject()
                 .put("stability", 0.45)

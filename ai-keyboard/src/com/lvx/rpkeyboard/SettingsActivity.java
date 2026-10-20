@@ -74,6 +74,13 @@ public class SettingsActivity extends Activity {
 
     private static final int PICK_BG = 9001;
 
+    private Spinner themeSpinner;
+    private CheckBox hapticsBox;
+    private EditText maxTokensField;
+    private Spinner voiceSpinner;
+    private java.util.List<com.lvx.rpkeyboard.voice.ElevenLabsClient.Voice> voices =
+            new java.util.ArrayList<com.lvx.rpkeyboard.voice.ElevenLabsClient.Voice>();
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -275,6 +282,30 @@ public class SettingsActivity extends Activity {
         col.addView(hint("Identifiant de modele libre : colle celui que ton compte "
                 + "propose. Le mode automatique n'utilise jamais le vocal."));
 
+        col.addView(spacer(dp(10)));
+        col.addView(action("Charger mes voix", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                loadVoices();
+            }
+        }));
+        voiceSpinner = new Spinner(this);
+        voiceSpinner.setBackground(box(FIELD));
+        voiceSpinner.setAdapter(adapter(java.util.Arrays.asList("appuie sur Charger mes voix")));
+        voiceSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
+                if (pos >= 0 && pos < voices.size()) {
+                    elevenVoiceField.setText(voices.get(pos).id);
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        col.addView(voiceSpinner);
+
         // --- image --------------------------------------------------------
         col.addView(spacer(dp(22)));
         col.addView(label("Generation d'images"));
@@ -306,6 +337,70 @@ public class SettingsActivity extends Activity {
         col.addView(ctxShareField);
         ctxHint = hint("");
         col.addView(ctxHint);
+
+
+        // --- bulle flottante ---------------------------------------------
+        col.addView(spacer(dp(22)));
+        col.addView(label("Bulle flottante"));
+        col.addView(hint("Declenche la lecture d'ecran clavier ferme. Sans clavier "
+                + "ouvert il n'y a pas de champ a remplir : la proposition choisie "
+                + "part dans le presse-papiers, il reste a la coller."));
+        col.addView(action("Autoriser l'affichage par-dessus les apps",
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        startActivity(BubbleService.overlayPermissionIntent(
+                                SettingsActivity.this));
+                    }
+                }));
+        col.addView(action("Afficher la bulle", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (!BubbleService.canOverlay(SettingsActivity.this)) {
+                    Toast.makeText(SettingsActivity.this,
+                            "Autorise d'abord l'affichage par-dessus les apps",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                startForegroundService(new Intent(SettingsActivity.this, BubbleService.class)
+                        .setAction(BubbleService.ACTION_SHOW));
+            }
+        }));
+        col.addView(action("Masquer la bulle", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startService(new Intent(SettingsActivity.this, BubbleService.class)
+                        .setAction(BubbleService.ACTION_HIDE));
+            }
+        }));
+
+        // --- theme et frappe ---------------------------------------------
+        col.addView(spacer(dp(22)));
+        col.addView(label("Theme"));
+        themeSpinner = new Spinner(this);
+        java.util.List<String> themeNames = new java.util.ArrayList<String>();
+        for (com.lvx.rpkeyboard.ime.Theme t : com.lvx.rpkeyboard.ime.Theme.values()) {
+            themeNames.add(t.label);
+        }
+        themeSpinner.setAdapter(adapter(themeNames));
+        themeSpinner.setSelection(cfg.theme().ordinal());
+        themeSpinner.setBackground(box(FIELD));
+        col.addView(themeSpinner);
+
+        col.addView(spacer(dp(12)));
+        hapticsBox = new CheckBox(this);
+        hapticsBox.setText("Vibration a la frappe");
+        hapticsBox.setTextColor(Color.parseColor(LABEL));
+        hapticsBox.setChecked(cfg.haptics());
+        col.addView(hapticsBox);
+
+        col.addView(spacer(dp(14)));
+        col.addView(label("Longueur maximale de reponse (tokens)"));
+        maxTokensField = field(String.valueOf(cfg.maxTokens()), "4000", 1);
+        maxTokensField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        col.addView(maxTokensField);
+        col.addView(hint("1200 coupait les reponses longues. Monte si tes messages de "
+                + "jeu de role sont encore tronques."));
 
         // --- actions ----------------------------------------------------
         col.addView(spacer(dp(22)));
@@ -386,6 +481,10 @@ public class SettingsActivity extends Activity {
                 imgModelField.getText().toString());
         cfg.setContextWindow(intOf(ctxWindowField, 200_000));
         cfg.setContextShare(intOf(ctxShareField, 8));
+        cfg.setTheme(com.lvx.rpkeyboard.ime.Theme.values()[
+                themeSpinner.getSelectedItemPosition()]);
+        cfg.setHaptics(hapticsBox.isChecked());
+        cfg.setMaxTokens(intOf(maxTokensField, 4000));
         refreshCtxHint();
     }
 
@@ -409,6 +508,56 @@ public class SettingsActivity extends Activity {
         ctxHint.setText("Budget d'historique : environ " + (chars / 4) + " tokens ("
                 + chars + " caracteres). Au-dela, les anciens messages sont resumes "
                 + "localement, sans appel paye.");
+    }
+
+    /** Va chercher la liste des voix du compte ElevenLabs. */
+    private void loadVoices() {
+        final String key = elevenKeyField.getText().toString().trim();
+        if (key.isEmpty()) {
+            Toast.makeText(this, "Renseigne d'abord la cle ElevenLabs",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Toast.makeText(this, "Chargement des voix...", Toast.LENGTH_SHORT).show();
+        final Handler ui = new Handler(Looper.getMainLooper());
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final java.util.List<com.lvx.rpkeyboard.voice.ElevenLabsClient.Voice> got =
+                            com.lvx.rpkeyboard.voice.ElevenLabsClient.listVoices(key);
+                    ui.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            voices = got;
+                            java.util.List<String> names = new java.util.ArrayList<String>();
+                            for (com.lvx.rpkeyboard.voice.ElevenLabsClient.Voice v : got) {
+                                names.add(v.name);
+                            }
+                            voiceSpinner.setAdapter(adapter(names));
+                            // On repositionne sur la voix deja choisie, si elle y est.
+                            String current = elevenVoiceField.getText().toString().trim();
+                            for (int i = 0; i < got.size(); i++) {
+                                if (got.get(i).id.equals(current)) {
+                                    voiceSpinner.setSelection(i);
+                                    break;
+                                }
+                            }
+                            Toast.makeText(SettingsActivity.this,
+                                    got.size() + " voix trouvees", Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                } catch (final Exception e) {
+                    ui.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(SettingsActivity.this,
+                                    "Echec : " + e.getMessage(), Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
+            }
+        }).start();
     }
 
     private void pickBackground() {

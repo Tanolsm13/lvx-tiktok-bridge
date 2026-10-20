@@ -28,6 +28,16 @@ public final class LlmClient implements Completer {
     private final String apiKey;
     private final String model;
 
+    /** Plafond de sortie. 1200 coupait les reponses longues de jeu de role. */
+    private int maxTokens = 4000;
+
+    public LlmClient withMaxTokens(int tokens) {
+        if (tokens > 0) {
+            this.maxTokens = tokens;
+        }
+        return this;
+    }
+
     public LlmClient(Provider provider, String url, String apiKey, String model) {
         this.provider = provider;
         this.url = (url == null || url.trim().isEmpty()) ? provider.defaultUrl : url.trim();
@@ -78,7 +88,7 @@ public final class LlmClient implements Completer {
                 .put("model", model)
                 .put("messages", messages)
                 .put("temperature", 0.9)
-                .put("max_tokens", 1200)
+                .put("max_tokens", maxTokens)
                 .put("stream", false)
                 .toString();
     }
@@ -103,7 +113,7 @@ public final class LlmClient implements Completer {
                 .put("system", system)
                 .put("messages", messages)
                 .put("temperature", 0.9)
-                .put("max_tokens", 1200)
+                .put("max_tokens", maxTokens)
                 .toString();
     }
 
