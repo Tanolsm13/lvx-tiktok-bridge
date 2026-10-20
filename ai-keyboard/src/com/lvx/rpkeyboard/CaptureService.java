@@ -185,13 +185,27 @@ public class CaptureService extends Service {
                     ConversationLog log = s.loadLog(threadKey);
 
                     AiEngine engine = new AiEngine(client, cfg)
-                            .withBudget(s.contextBudgetChars());
+                            .withBudget(s.contextBudgetChars())
+                            .withProgress(new AiEngine.Progress() {
+                                @Override
+                                public void onRetry(int attempt, int total, String why) {
+                                    Bus.status("Nouvelle tentative " + attempt + "/" + total
+                                            + " (" + why + ")");
+                                }
+                            });
                     AiEngine.Result result = log.isEmpty()
                             ? engine.fromScreenshot(jpeg)
                             : engine.fromBoth(log.items(), jpeg);
 
                     if (result.isOk()) {
                         Bus.suggestions(result.variants);
+                        int asked = cfg.count;
+                        if (result.variants.size() < asked) {
+                            // On le dit plutot que de laisser croire a une seule idee.
+                            Bus.status(result.variants.size() + " proposition"
+                                    + (result.variants.size() > 1 ? "s" : "")
+                                    + " sur " + asked + " renvoyees par le modele");
+                        }
                     } else {
                         Bus.error(result.error);
                     }

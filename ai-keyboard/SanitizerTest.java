@@ -90,6 +90,70 @@ public class SanitizerTest {
         fails("choices absent", "{\"id\":\"x\"}",
                 Sanitizer.Shape.OPENAI, Sanitizer.Kind.STRUCTURE);
 
+        // --- DECOUPAGE EN PLUSIEURS PROPOSITIONS -----------------------
+        variants("separateur canonique",
+                openai("Une.\\n<|sep|>\\nDeux.\\n<|sep|>\\nTrois."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Une.", "Deux.", "Trois."});
+
+        variants("separateur en ligne",
+                openai("Une. <|sep|> Deux. <|sep|> Trois."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Une.", "Deux.", "Trois."});
+
+        // Le bug signale : ### devient un titre markdown et collait tout.
+        variants("BUG titres markdown",
+                openai("### Reponse 1\\nJe recule.\\n### Reponse 2\\nJe souris.\\n### Reponse 3\\nJe me tais."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Je recule.", "Je souris.", "Je me tais."});
+
+        variants("libelles en gras",
+                openai("**Proposition 1**\\nViens la.\\n**Proposition 2**\\nReste ou tu es."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Viens la.", "Reste ou tu es."});
+
+        variants("liste numerotee",
+                openai("1. Premiere.\\n2. Deuxieme.\\n3. Troisieme."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Premiere.", "Deuxieme.", "Troisieme."});
+
+        variants("regle horizontale",
+                openai("Une.\\n---\\nDeux."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Une.", "Deux."});
+
+        // --- JSON NOYE DANS LA PROSE -----------------------------------
+        variants("BUG json melange a du texte",
+                openai("Voici mes propositions : {\\\"replies\\\":[\\\"Salut toi.\\\",\\\"Tu dors ?\\\"]} voila."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Salut toi.", "Tu dors ?"});
+
+        variants("json simple noye",
+                openai("Reponse : {\\\"reply\\\":\\\"Je t'attends.\\\"}"),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Je t'attends."});
+
+        // --- PIEGES du nouveau decoupage -------------------------------
+        variants("PIEGE accolades sans cle connue",
+                openai("Le panneau affichait {ACCES REFUSE} en rouge."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Le panneau affichait {ACCES REFUSE} en rouge."});
+
+        variants("PIEGE objet json sans cle de texte",
+                openai("Il a tape {\\\"x\\\":1} sur le clavier."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Il a tape {\"x\":1} sur le clavier."});
+
+        variants("PIEGE un seul titre ne decoupe pas",
+                openai("### Contexte\\nElle attend une reponse."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Elle attend une reponse."});
+
+        variants("PIEGE paragraphes d'une meme reponse",
+                openai("Je m'approche.\\n\\nPuis je m'arrete net."),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Je m'approche.\n\nPuis je m'arrete net."});
+
         System.out.println();
         System.out.println("reussis=" + ok + " echoues=" + ko);
         if (ko > 0) {

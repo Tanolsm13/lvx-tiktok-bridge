@@ -17,8 +17,14 @@ import java.util.List;
  */
 public final class Sanitizer {
 
-    /** Separateur impose au modele par le prompt : pas de JSON en sortie. */
-    public static final String SEP = "###";
+    /**
+     * Separateur impose au modele par le prompt : pas de JSON en sortie.
+     *
+     * Volontairement hors syntaxe markdown. Un {@code ###} serait un titre de
+     * niveau 3 : le modele ecrit alors « ### Reponse 1 » au lieu du separateur
+     * seul sur sa ligne, et les propositions arrivent collees en une seule.
+     */
+    public static final String SEP = "<|sep|>";
 
     public enum Kind {
         VIDE("reponse vide du modele"),
@@ -75,15 +81,105 @@ public final class Sanitizer {
         String content = extractContent(body, shape);
         String clean = clean(content);
 
-        List<String> out = new ArrayList<String>();
-        for (String part : clean.split("(?m)^\\s*" + SEP + "\\s*$")) {
-            String piece = clean(part);
-            if (!piece.isEmpty()) {
-                out.add(piece);
-            }
-        }
+        List<String> out = split(clean);
         if (out.isEmpty()) {
             throw new BadReply(Kind.VIDE, null);
+        }
+        return out;
+    }
+
+    /**
+     * Decoupe en propositions, en essayant plusieurs conventions.
+     *
+     * Les modeles n'obeissent pas toujours au separateur demande : certains le
+     * remplacent par un titre markdown, une regle horizontale ou une liste
+     * numerotee. On essaie dans cet ordre et on s'arrete des qu'un decoupage
+     * donne au moins deux morceaux.
+     */
+    static List<String> split(String text) {
+        List<String> out = bySeparator(text, java.util.regex.Pattern.quote(SEP));
+        if (out.size() >= 2) {
+            return out;
+        }
+        // separateur seul sur sa ligne : ###, ---, ===, ***
+        out = bySeparator(text, "(?m)^[ \\t]*(?:#{3,}|-{3,}|={3,}|\\*{3,})[ \\t]*$");
+        if (out.size() >= 2) {
+            return out;
+        }
+        out = byHeadings(text);
+        if (out.size() >= 2) {
+            return out;
+        }
+        out = byNumberedList(text);
+        if (out.size() >= 2) {
+            return out;
+        }
+        return cleanAll(new String[]{text});
+    }
+
+    private static List<String> bySeparator(String text, String regex) {
+        return cleanAll(text.split(regex));
+    }
+
+    /**
+     * Titres markdown ou libelles en gras utilises comme separateurs :
+     * « ### Reponse 1 », « **Proposition 2** ». La ligne de titre est jetee.
+     */
+    private static List<String> byHeadings(String text) {
+        String[] lines = text.split("\n");
+        List<String> pieces = new ArrayList<String>();
+        StringBuilder current = new StringBuilder();
+        int headings = 0;
+
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            String t = line.trim();
+            boolean isHeading = t.matches("#{1,6}\\s+\\S.*")
+                    || t.matches("\\*\\*[^*]{1,40}\\*\\*:?");
+            if (isHeading) {
+                headings++;
+                if (current.length() > 0) {
+                    pieces.add(current.toString());
+                    current.setLength(0);
+                }
+            } else {
+                if (current.length() > 0) {
+                    current.append('\n');
+                }
+                current.append(line);
+            }
+        }
+        if (current.length() > 0) {
+            pieces.add(current.toString());
+        }
+        // Un titre en tete a deja ete retire par clean(), donc un seul titre
+        // restant separe bien deux propositions. C'est split() qui tranche, en
+        // n'acceptant ce decoupage que s'il donne au moins deux morceaux.
+        if (headings < 1) {
+            return new ArrayList<String>();
+        }
+        return cleanAll(pieces.toArray(new String[0]));
+    }
+
+    /** Liste numerotee : « 1. ... » / « 2) ... » en debut de ligne. */
+    private static List<String> byNumberedList(String text) {
+        if (!text.trim().matches("(?s)^\\s*1[.)]\\s+\\S.*")) {
+            return new ArrayList<String>();
+        }
+        return cleanAll(text.split("(?m)^[ \\t]*\\d{1,2}[.)]\\s+"));
+    }
+
+    private static List<String> cleanAll(String[] parts) {
+        List<String> out = new ArrayList<String>();
+        for (int i = 0; i < parts.length; i++) {
+            try {
+                String piece = clean(parts[i]);
+                if (!piece.isEmpty()) {
+                    out.add(piece);
+                }
+            } catch (BadReply ignored) {
+                // un morceau illisible ne doit pas condamner les autres
+            }
         }
         return out;
     }
@@ -241,8 +337,10 @@ public final class Sanitizer {
             String before = s;
             s = stripThink(s);
             s = stripFence(s);
+            s = stripLeadingHeading(s);
             s = stripRolePrefix(s);
             s = unwrapJson(s);
+            s = unwrapEmbeddedJson(s);
             s = unescape(s);
             s = stripQuotes(s);
             s = s.trim();
@@ -254,6 +352,81 @@ public final class Sanitizer {
             throw new BadReply(Kind.ENCORE_JSON, null);
         }
         return s.trim();
+    }
+
+
+    /**
+     * Extrait un objet JSON <b>noye dans de la prose</b>.
+     *
+     * {@link #unwrapJson} ne traite que les chaines entierement JSON. Un modele
+     * bavard peut repondre « Voici mes propositions : {"replies":[...]} », et la
+     * chaine complete n'etant pas du JSON, le garde-fou final ne la refuse pas :
+     * le bloc finissait dans le message.
+     *
+     * On ne touche qu'a un bloc equilibre qui s'analyse <b>et</b> porte une des
+     * cles connues. Un texte legitime contenant {@code {ACCES REFUSE}} n'a
+     * aucune de ces cles et n'est pas du JSON valide : il passe intact.
+     */
+    static String unwrapEmbeddedJson(String s) {
+        int open = s.indexOf('{');
+        if (open < 0) {
+            return s;
+        }
+        for (int start = open; start >= 0; start = s.indexOf('{', start + 1)) {
+            int end = matchingBrace(s, start);
+            if (end < 0) {
+                continue;
+            }
+            String candidate = s.substring(start, end + 1);
+            JSONObject o = asObject(candidate);
+            if (o == null) {
+                continue;
+            }
+            for (String key : new String[]{"replies", "variants", "propositions"}) {
+                JSONArray arr = o.optJSONArray(key);
+                if (arr != null) {
+                    return joinArray(arr);
+                }
+            }
+            for (String key : TEXT_KEYS) {
+                Object v = o.opt(key);
+                if (v instanceof String && !((String) v).trim().isEmpty()) {
+                    return (String) v;
+                }
+            }
+        }
+        return s;
+    }
+
+    /** Position de l'accolade fermante correspondante, en ignorant les chaines. */
+    private static int matchingBrace(String s, int start) {
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = start; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
     }
 
     static String stripThink(String s) {
@@ -283,6 +456,30 @@ public final class Sanitizer {
             return s;
         }
         return t.substring(firstBreak + 1, end).trim();
+    }
+
+
+    /**
+     * Retire un titre markdown en tete, du bavardage de modele du type
+     * « ### Contexte » suivi du vrai message.
+     *
+     * On n'y touche que s'il reste du contenu apres : une reponse d'une seule
+     * ligne entierement en gras est un message legitime, pas un titre.
+     */
+    static String stripLeadingHeading(String s) {
+        String t = s.trim();
+        int nl = t.indexOf('\n');
+        if (nl < 0) {
+            return s;
+        }
+        String first = t.substring(0, nl).trim();
+        String rest = t.substring(nl + 1).trim();
+        if (rest.isEmpty()) {
+            return s;
+        }
+        boolean heading = first.matches("#{1,6}\\s+\\S.*")
+                || first.matches("\\*\\*[^*]{1,40}\\*\\*:?");
+        return heading ? rest : s;
     }
 
     static String stripRolePrefix(String s) {

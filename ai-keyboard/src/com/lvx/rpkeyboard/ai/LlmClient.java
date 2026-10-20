@@ -12,12 +12,12 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 /** Appel HTTP au fournisseur. Ne lit jamais la reponse : il la rend brute. */
-public final class LlmClient {
+public final class LlmClient implements Completer {
 
     public static final class HttpError extends Exception {
         public final int code;
 
-        HttpError(int code, String body) {
+        public HttpError(int code, String body) {
             super("HTTP " + code + (body == null || body.isEmpty() ? "" : " : " + shorten(body)));
             this.code = code;
         }
@@ -35,6 +35,7 @@ public final class LlmClient {
         this.model = (model == null || model.trim().isEmpty()) ? provider.defaultModel : model.trim();
     }
 
+    @Override
     public Sanitizer.Shape shape() {
         return provider.shape;
     }
@@ -44,6 +45,7 @@ public final class LlmClient {
      *
      * @param jpeg capture d'ecran facultative, pour les modeles a vision
      */
+    @Override
     public String complete(String system, String user, byte[] jpeg) throws Exception {
         if (apiKey.isEmpty()) {
             throw new Exception("aucune cle API configuree");

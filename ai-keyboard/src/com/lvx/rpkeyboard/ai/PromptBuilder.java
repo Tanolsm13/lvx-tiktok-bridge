@@ -75,15 +75,23 @@ public final class PromptBuilder {
                     .append(c.styleProfile.trim());
         }
 
+        int n = Math.max(1, c.count);
         sb.append("\n\nContrat de sortie, a respecter strictement :\n");
-        sb.append("- Produis exactement ").append(Math.max(1, c.count))
-                .append(" propositions differentes.\n");
-        sb.append("- Separe-les par une ligne contenant exactement ")
+        sb.append("- Produis exactement ").append(n).append(" propositions differentes.\n");
+        sb.append("- Separe chaque proposition par une ligne contenant exactement ")
                 .append(Sanitizer.SEP).append("\n");
         sb.append("- Chaque proposition est le texte du message, rien d'autre.\n");
-        sb.append("- Pas de JSON, pas de guillemets autour, pas de numerotation, ");
-        sb.append("pas de commentaire, pas d'explication.\n");
+        sb.append("- Pas de JSON, pas de titre, pas de numerotation, pas de ");
+        sb.append("guillemets autour, pas de commentaire, pas d'explication.\n");
         sb.append("- Varie : une courte, une plus developpee, une qui relance.\n");
+
+        sb.append("\nFormat attendu, exactement :\n");
+        for (int i = 1; i <= n; i++) {
+            sb.append("texte de la proposition ").append(i).append('\n');
+            if (i < n) {
+                sb.append(Sanitizer.SEP).append('\n');
+            }
+        }
         return sb.toString();
     }
 
