@@ -28,6 +28,12 @@ public final class Sanitizer {
 
     public enum Kind {
         VIDE("reponse vide du modele"),
+        /** Refus explicite, ou arret pour filtrage de contenu. */
+        FILTRE("filtre de contenu : le modele a refuse"),
+        /** Plafond de tokens atteint avant le moindre caractere de texte. */
+        COUPE("reponse coupee avant le texte"),
+        /** Tout le budget est parti dans la reflexion, rien n'en est sorti. */
+        RAISONNEMENT("le modele n'a produit que son raisonnement"),
         ENCORE_JSON("le modele a renvoye du JSON au lieu de texte"),
         STRUCTURE("reponse de forme inattendue"),
         ERREUR_API("erreur renvoyee par l'API");
@@ -61,6 +67,8 @@ public final class Sanitizer {
             "reply", "text", "content", "message", "output", "response", "answer"
     };
 
+    private static final String[] THINK_TAGS = {"think", "thinking", "reasoning"};
+
     private static final String[] ROLE_PREFIXES = {
             "assistant:", "assistant :", "ia:", "ia :", "reponse:", "reponse :",
             "réponse:", "réponse :", "moi:", "moi :"
@@ -83,6 +91,11 @@ public final class Sanitizer {
 
         List<String> out = split(clean);
         if (out.isEmpty()) {
+            if (hasOpenThink(content)) {
+                // Le modele a ete coupe en pleine reflexion : il n'y a jamais
+                // eu de texte a envoyer, et le dire evite trois reessais.
+                throw new BadReply(Kind.RAISONNEMENT, "bloc de reflexion jamais ferme");
+            }
             throw new BadReply(Kind.VIDE, null);
         }
         return out;
@@ -222,33 +235,151 @@ public final class Sanitizer {
                     sb.append(b.optString("text", ""));
                 }
             }
+            if (sb.toString().trim().isEmpty()) {
+                String stop = finishReason(root);
+                if (isFilter(stop)) {
+                    throw new BadReply(Kind.FILTRE, "stop_reason=" + stop);
+                }
+                if (isLength(stop)) {
+                    throw new BadReply(Kind.COUPE, "stop_reason=" + stop);
+                }
+                throw new BadReply(Kind.VIDE, stop.isEmpty() ? null : "stop_reason=" + stop);
+            }
             return sb.toString();
         }
 
         JSONArray choices = root.optJSONArray("choices");
         if (choices == null || choices.length() == 0) {
-            throw new BadReply(Kind.STRUCTURE, "choices absent");
+            throw new BadReply(Kind.STRUCTURE, "choices absent, recu " + shorten(trimmed));
         }
         JSONObject first = choices.optJSONObject(0);
         if (first == null) {
-            throw new BadReply(Kind.STRUCTURE, "choice vide");
+            throw new BadReply(Kind.STRUCTURE, "choice vide, recu " + shorten(trimmed));
         }
         JSONObject message = first.optJSONObject("message");
         if (message == null) {
             // Certaines passerelles renvoient directement text.
             String direct = first.optString("text", "");
-            if (!direct.isEmpty()) {
+            if (!direct.trim().isEmpty()) {
                 return direct;
             }
-            throw new BadReply(Kind.STRUCTURE, "message absent");
+            throw new BadReply(Kind.STRUCTURE, "message absent, recu " + shorten(trimmed));
         }
-        return contentToText(message.opt("content"));
+
+        String text = contentToText(message.opt("content"));
+        if (!text.trim().isEmpty()) {
+            return text;
+        }
+        throw emptyReason(message, finishReason(first));
     }
 
-    /** Le contenu peut etre une chaine ou une liste de blocs. */
-    private static String contentToText(Object content) throws BadReply {
-        if (content == null) {
-            throw new BadReply(Kind.VIDE, null);
+    /**
+     * Pourquoi une reponse a 200 n'a aucun texte.
+     *
+     * C'etait le trou noir de la 3.0 : toute reponse sans texte devenait
+     * « reponse vide », reessayee trois fois, et l'utilisateur n'apprenait
+     * rien. Or les passerelles compatibles OpenAI disent toujours pourquoi,
+     * d'une de ces facons — un champ {@code refusal}, un {@code finish_reason}
+     * de filtrage, un plafond atteint, ou tout le texte range dans le
+     * raisonnement. Chaque cause demande un geste different, donc chacune a
+     * son type et son conseil.
+     */
+    static BadReply emptyReason(JSONObject message, String finish) {
+        String refusal = str(message.opt("refusal"));
+        if (!refusal.trim().isEmpty()) {
+            return new BadReply(Kind.FILTRE, refusal.trim());
+        }
+        if (isFilter(finish)) {
+            return new BadReply(Kind.FILTRE, "finish_reason=" + finish);
+        }
+        if (message.optJSONArray("tool_calls") != null) {
+            return new BadReply(Kind.STRUCTURE, "le modele a appele un outil au lieu d'ecrire");
+        }
+        String reasoning = reasoning(message);
+        if (!reasoning.trim().isEmpty()) {
+            return new BadReply(Kind.RAISONNEMENT,
+                    reasoning.trim().length() + " caracteres de reflexion, zero de texte"
+                            + (isLength(finish) ? ", plafond atteint" : ""));
+        }
+        if (isLength(finish)) {
+            return new BadReply(Kind.COUPE, "finish_reason=" + finish);
+        }
+        return new BadReply(Kind.VIDE, finish.isEmpty() ? null : "finish_reason=" + finish);
+    }
+
+    /**
+     * Le raisonnement du modele, sous l'un des noms en usage.
+     *
+     * Il n'est jamais rendu comme reponse : c'est le monologue interne du
+     * modele, et il n'a rien a faire dans une conversation. On le lit
+     * seulement pour savoir que le modele a pense sans ecrire.
+     */
+    static String reasoning(JSONObject message) {
+        String[] keys = {"reasoning_content", "reasoning", "thinking", "thought"};
+        for (int i = 0; i < keys.length; i++) {
+            String v = str(message.opt(keys[i]));
+            if (!v.trim().isEmpty()) {
+                return v;
+            }
+        }
+        JSONArray details = message.optJSONArray("reasoning_details");
+        if (details != null) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < details.length(); i++) {
+                JSONObject d = details.optJSONObject(i);
+                if (d != null) {
+                    sb.append(d.optString("text", d.optString("summary", "")));
+                }
+            }
+            return sb.toString();
+        }
+        return "";
+    }
+
+    /** Le motif d'arret, quel que soit le nom donne par la passerelle. */
+    static String finishReason(JSONObject holder) {
+        String[] keys = {"finish_reason", "native_finish_reason", "stop_reason", "finishReason"};
+        for (int i = 0; i < keys.length; i++) {
+            String v = str(holder.opt(keys[i])).trim();
+            if (!v.isEmpty()) {
+                return v;
+            }
+        }
+        return "";
+    }
+
+    static boolean isFilter(String finish) {
+        String f = finish == null ? "" : finish.toLowerCase();
+        return f.contains("content_filter") || f.contains("safety") || f.contains("blocked")
+                || f.contains("prohibited") || f.contains("recitation")
+                || f.contains("refusal") || f.contains("filter");
+    }
+
+    static boolean isLength(String finish) {
+        String f = finish == null ? "" : finish.toLowerCase();
+        return f.contains("length") || f.contains("max_token") || f.contains("truncat");
+    }
+
+    /** Vrai si un bloc de reflexion est ouvert et jamais referme. */
+    static boolean hasOpenThink(String s) {
+        if (s == null) {
+            return false;
+        }
+        for (int i = 0; i < THINK_TAGS.length; i++) {
+            String tag = THINK_TAGS[i];
+            int open = indexOfIgnoreCase(s, "<" + tag + ">");
+            int close = indexOfIgnoreCase(s, "</" + tag + ">");
+            if (open >= 0 && close < open) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Le contenu peut etre une chaine, une liste de blocs, ou rien. */
+    static String contentToText(Object content) {
+        if (content == null || JSONObject.NULL.equals(content)) {
+            return "";
         }
         if (content instanceof JSONArray) {
             StringBuilder sb = new StringBuilder();
@@ -257,11 +388,27 @@ public final class Sanitizer {
                 JSONObject part = parts.optJSONObject(i);
                 if (part != null) {
                     sb.append(part.optString("text", ""));
+                } else {
+                    String raw = parts.optString(i, "");
+                    sb.append(raw);
                 }
             }
             return sb.toString();
         }
         return content.toString();
+    }
+
+    private static String str(Object o) {
+        return (o == null || JSONObject.NULL.equals(o)) ? "" : String.valueOf(o);
+    }
+
+    /** Extrait court du corps, pour que l'erreur affichee serve a quelque chose. */
+    static String shorten(String s) {
+        if (s == null) {
+            return "";
+        }
+        String t = s.trim().replaceAll("\\s+", " ");
+        return t.length() > 180 ? t.substring(0, 180) + "..." : t;
     }
 
     private static String errorMessage(Object err) {
@@ -431,11 +578,17 @@ public final class Sanitizer {
 
     static String stripThink(String s) {
         String out = s;
-        for (String tag : new String[]{"think", "thinking", "reasoning"}) {
+        for (int i = 0; i < THINK_TAGS.length; i++) {
+            String tag = THINK_TAGS[i];
             int open = indexOfIgnoreCase(out, "<" + tag + ">");
             int close = indexOfIgnoreCase(out, "</" + tag + ">");
             if (open >= 0 && close > open) {
                 out = out.substring(0, open) + out.substring(close + tag.length() + 3);
+            } else if (open >= 0) {
+                // Bloc jamais ferme : la reponse a ete coupee en pleine
+                // reflexion. Tout ce qui suit l'ouverture est du monologue,
+                // et le laisser passer le collerait dans la conversation.
+                out = out.substring(0, open);
             }
         }
         return out.trim();

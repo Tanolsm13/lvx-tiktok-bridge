@@ -17,4 +17,7 @@ public interface Completer {
 
     /** Forme de reponse attendue du fournisseur. */
     Sanitizer.Shape shape();
+
+    /** Nom affichable du modele, pour dire qui a repondu. */
+    String label();
 }

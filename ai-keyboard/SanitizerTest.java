@@ -154,10 +154,111 @@ public class SanitizerTest {
                 Sanitizer.Shape.OPENAI,
                 new String[]{"Je m'approche.\n\nPuis je m'arrete net."});
 
+
+        // --- diagnostic des reponses vides (le defaut de la 3.0) --------
+        // Une 200 sans texte n'est pas une panne : c'est un refus, une coupe
+        // ou un monologue. Les distinguer est tout l'interet du correctif.
+        fails("refus explicite",
+                "{\"choices\":[{\"message\":{\"content\":\"\",\"refusal\":"
+                        + "\"I can't help with that\"}}]}",
+                Sanitizer.Shape.OPENAI, Sanitizer.Kind.FILTRE);
+
+        fails("arret pour filtrage de contenu",
+                "{\"choices\":[{\"finish_reason\":\"content_filter\","
+                        + "\"message\":{\"content\":\"\"}}]}",
+                Sanitizer.Shape.OPENAI, Sanitizer.Kind.FILTRE);
+
+        fails("filtrage sous le nom safety",
+                "{\"choices\":[{\"native_finish_reason\":\"SAFETY\","
+                        + "\"message\":{\"content\":\"\"}}]}",
+                Sanitizer.Shape.OPENAI, Sanitizer.Kind.FILTRE);
+
+        fails("plafond atteint avant le texte",
+                "{\"choices\":[{\"finish_reason\":\"length\","
+                        + "\"message\":{\"content\":\"\"}}]}",
+                Sanitizer.Shape.OPENAI, Sanitizer.Kind.COUPE);
+
+        fails("tout le budget parti en reflexion",
+                "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{"
+                        + "\"content\":\"\",\"reasoning_content\":"
+                        + "\"Bon, elle demande une reponse tendre, donc...\"}}]}",
+                Sanitizer.Shape.OPENAI, Sanitizer.Kind.RAISONNEMENT);
+
+        fails("reflexion dans reasoning_details",
+                "{\"choices\":[{\"message\":{\"content\":\"\","
+                        + "\"reasoning_details\":[{\"text\":\"je reflechis\"}]}}]}",
+                Sanitizer.Shape.OPENAI, Sanitizer.Kind.RAISONNEMENT);
+
+        fails("appel d'outil au lieu d'un texte",
+                "{\"choices\":[{\"message\":{\"content\":\"\",\"tool_calls\":"
+                        + "[{\"id\":\"c1\",\"type\":\"function\"}]}}]}",
+                Sanitizer.Shape.OPENAI, Sanitizer.Kind.STRUCTURE);
+
+        fails("vide sans explication",
+                openai(""), Sanitizer.Shape.OPENAI, Sanitizer.Kind.VIDE);
+
+        fails("bloc de reflexion jamais ferme",
+                openai("<think>elle vient de dire qu'elle est fatiguee, donc"),
+                Sanitizer.Shape.OPENAI, Sanitizer.Kind.RAISONNEMENT);
+
+        fails("anthropic coupe net",
+                "{\"stop_reason\":\"max_tokens\",\"content\":[{\"type\":\"text\","
+                        + "\"text\":\"\"}]}",
+                Sanitizer.Shape.ANTHROPIC, Sanitizer.Kind.COUPE);
+
+        // Le monologue ne doit jamais atterrir dans la conversation, meme
+        // quand le bloc n'est pas ferme : on garde ce qui precede, sinon rien.
+        variants("texte avant un think non ferme",
+                openai("Je te prends la main.\\n<think>est-ce trop ?"),
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Je te prends la main."});
+
+        variants("balise thinking fermee",
+                openai("<thinking>plan</thinking>Je souris.") ,
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Je souris."});
+
+        // Le message existe mais le texte est en morceaux : forme courante
+        // chez les passerelles compatibles OpenAI.
+        variants("contenu en tableau de blocs",
+                "{\"choices\":[{\"message\":{\"content\":[{\"type\":\"text\","
+                        + "\"text\":\"Viens la.\"}]}}]}",
+                Sanitizer.Shape.OPENAI,
+                new String[]{"Viens la."});
+
+        // Le detail doit nommer la cause : sans lui, l'app affiche « reponse
+        // vide » et l'utilisateur n'a rien a corriger.
+        detail("le detail nomme finish_reason",
+                "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{"
+                        + "\"content\":\"\"}}]}",
+                "finish_reason");
+
+        detail("le detail compte les caracteres de reflexion",
+                "{\"choices\":[{\"message\":{\"content\":\"\","
+                        + "\"reasoning\":\"abcdefghij\"}}]}",
+                "10");
+
         System.out.println();
         System.out.println("reussis=" + ok + " echoues=" + ko);
         if (ko > 0) {
             System.exit(1);
+        }
+    }
+
+    /** L'echec porte-t-il bien le detail qui permet de corriger ? */
+    static void detail(String name, String body, String needle) {
+        try {
+            Sanitizer.variants(body, Sanitizer.Shape.OPENAI);
+            fail(name, "aurait du echouer");
+        } catch (Sanitizer.BadReply e) {
+            String m = e.getMessage() == null ? "" : e.getMessage();
+            if (m.contains(needle)) {
+                pass(name);
+            } else {
+                fail(name, "detail <" + m + "> sans <" + needle + ">");
+            }
+        } catch (Exception e) {
+            fail(name, "mauvaise exception " + e);
         }
     }
 

@@ -61,6 +61,59 @@ public final class Retry {
         return kind == Sanitizer.Kind.VIDE || kind == Sanitizer.Kind.STRUCTURE;
     }
 
+    /**
+     * Ce defaut peut-il se reparer en changeant de modele.
+     *
+     * Un filtre de contenu ne changera pas d'avis au troisieme appel, et un
+     * modele qui depense tout son budget a reflechir le depensera encore. Dans
+     * ces cas, reessayer le meme modele ne fait que couter ; un autre modele,
+     * lui, a une vraie chance de repondre. C'est tout l'interet du repli.
+     */
+    public static boolean worthAnotherModel(Sanitizer.Kind kind) {
+        return kind == Sanitizer.Kind.FILTRE
+                || kind == Sanitizer.Kind.COUPE
+                || kind == Sanitizer.Kind.RAISONNEMENT
+                || kind == Sanitizer.Kind.ENCORE_JSON
+                || kind == Sanitizer.Kind.VIDE
+                || kind == Sanitizer.Kind.STRUCTURE;
+    }
+
+    /**
+     * Un echec HTTP qui vise le modele demande, pas la cle ni le reseau.
+     *
+     * 404 pour un identifiant inconnu, 400 pour une requete que ce modele
+     * n'accepte pas — une image envoyee a un modele sans vision, par exemple.
+     * Un 401 reste fatal : aucun modele ne repondra avec une cle refusee.
+     */
+    public static boolean worthAnotherModel(int httpCode) {
+        return httpCode == 400 || httpCode == 404 || httpCode == 413 || httpCode == 422;
+    }
+
+    /** Message affichable pour une reponse mal formee, avec le geste a faire. */
+    public static String advise(Sanitizer.Kind kind, String detail) {
+        String tail = (detail == null || detail.trim().isEmpty())
+                ? "" : " (" + detail.trim() + ")";
+        switch (kind) {
+            case FILTRE:
+                return "Le modele a refuse de repondre" + tail
+                        + " : prends un modele plus permissif dans les reglages.";
+            case COUPE:
+                return "Coupe avant d'ecrire" + tail
+                        + " : monte la longueur maximale de reponse.";
+            case RAISONNEMENT:
+                return "Le modele a tout depense en reflexion" + tail
+                        + " : monte la longueur maximale, ou prends un modele sans reflexion.";
+            case ENCORE_JSON:
+                return "Le modele insiste avec du JSON" + tail + " : essaie un autre modele.";
+            case ERREUR_API:
+                return "L'API a renvoye une erreur" + tail + ".";
+            case STRUCTURE:
+                return "Reponse de forme inattendue" + tail + ".";
+            default:
+                return "Reponse vide du modele" + tail + " apres " + MAX_ATTEMPTS + " essais.";
+        }
+    }
+
     /** Attente avant la tentative suivante, croissante. */
     public static long backoffMs(int completedAttempts) {
         switch (completedAttempts) {
@@ -77,7 +130,18 @@ public final class Retry {
             return "Cle refusee (HTTP " + httpCode + ") : verifie la cle du fournisseur.";
         }
         if (httpCode == 404) {
-            return "Modele ou URL introuvable (404) : verifie l'identifiant du modele.";
+            return "Modele ou URL introuvable (404) : verifie l'identifiant du modele"
+                    + " — ils sont sensibles a la casse et portent un prefixe (vendeur/modele).";
+        }
+        if (httpCode == 400 && mentionsImage(base)) {
+            return "Ce modele ne sait pas lire les images (400) : prends-en un marque Vision.";
+        }
+        if (httpCode == 400 || httpCode == 422) {
+            return "Requete refusee (" + httpCode + ")"
+                    + (base.isEmpty() ? "" : " : " + base);
+        }
+        if (httpCode == 402) {
+            return "Credit WaveSpeed epuise (402) : recharge le compte.";
         }
         if (httpCode == 429) {
             return "Quota atteint (429) apres plusieurs essais : patiente un peu.";
@@ -87,5 +151,12 @@ public final class Retry {
                     + MAX_ATTEMPTS + " essais : panne de leur cote, reessaie plus tard.";
         }
         return base.isEmpty() ? ("HTTP " + httpCode) : base;
+    }
+
+    /** Vrai si le message d'erreur parle d'image : le modele n'a pas de vision. */
+    static boolean mentionsImage(String detail) {
+        String d = detail == null ? "" : detail.toLowerCase();
+        return d.contains("image") || d.contains("vision") || d.contains("multimodal")
+                || d.contains("image_url");
     }
 }

@@ -8,6 +8,9 @@ import com.lvx.rpkeyboard.ai.PromptBuilder;
 import com.lvx.rpkeyboard.ai.WaveSpeed;
 import com.lvx.rpkeyboard.ime.Theme;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Reglages de l'app.
  *
@@ -67,6 +70,80 @@ public final class Settings {
 
     public void setModel(String model) {
         sp.edit().putString("llm_model", model == null ? "" : model.trim()).apply();
+    }
+
+    /**
+     * Repli automatique sur un autre modele quand le premier ne rend rien.
+     *
+     * Actif par defaut : au milieu d'une conversation, voir arriver une
+     * reponse d'un autre modele vaut mieux que de devoir ouvrir les reglages.
+     */
+    public boolean fallbackEnabled() {
+        return sp.getBoolean("fallback", true);
+    }
+
+    public void setFallbackEnabled(boolean on) {
+        sp.edit().putBoolean("fallback", on).apply();
+    }
+
+    /**
+     * Modeles de repli, dans l'ordre, sans repeter le modele principal.
+     *
+     * La separation est volontairement permissive : virgule, point-virgule,
+     * retour a la ligne, espace ou le point median de l'affichage. Un champ de
+     * reglages se remplit souvent par copier-coller, et un identifiant perdu
+     * parce que le separateur n'etait pas le bon se paie en reponse vide.
+     */
+    public List<String> fallbackModels() {
+        String saved = sp.getString("fallback_models", "");
+        String[] ids = saved.trim().isEmpty()
+                ? WaveSpeed.VISION_MODELS : saved.split(SEPARATORS);
+        String primary = model();
+        List<String> out = new ArrayList<String>();
+        for (int i = 0; i < ids.length; i++) {
+            String id = ids[i].trim();
+            if (!id.isEmpty() && !id.equals(primary) && !out.contains(id)) {
+                out.add(id);
+            }
+        }
+        return out;
+    }
+
+    public void setFallbackModels(String separated) {
+        sp.edit().putString("fallback_models", nz(separated)).apply();
+    }
+
+    /** Virgule, point-virgule, point median, retour a la ligne ou espaces. */
+    static final String SEPARATORS = "[,;\u00b7\n\r\t ]+";
+
+    /** Dernier catalogue lu chez WaveSpeed, pour choisir hors ligne ensuite. */
+    public List<String> modelCatalogue() {
+        List<String> out = new ArrayList<String>();
+        String saved = sp.getString("catalogue", "");
+        if (saved.trim().isEmpty()) {
+            return out;
+        }
+        String[] ids = saved.split("\n");
+        for (int i = 0; i < ids.length; i++) {
+            String id = ids[i].trim();
+            if (!id.isEmpty()) {
+                out.add(id);
+            }
+        }
+        return out;
+    }
+
+    public void saveModelCatalogue(List<String> ids) {
+        StringBuilder sb = new StringBuilder();
+        if (ids != null) {
+            for (int i = 0; i < ids.size(); i++) {
+                if (sb.length() > 0) {
+                    sb.append('\n');
+                }
+                sb.append(ids.get(i));
+            }
+        }
+        sp.edit().putString("catalogue", sb.toString()).apply();
     }
 
     public String imageModel() {

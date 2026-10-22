@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.List;
 
 /**
  * Appel texte a WaveSpeed, au format OpenAI. Ne lit jamais la reponse : il la
@@ -33,10 +34,28 @@ public final class LlmClient implements Completer {
     /** Plafond de sortie. 1200 coupait les reponses longues de jeu de role. */
     private int maxTokens = 4000;
 
+    /**
+     * Point d'entree HTTP. Toujours WaveSpeed dans l'app.
+     *
+     * Remplacable uniquement pour le banc de test de bout en bout, qui fait
+     * parler un serveur local au protocole de WaveSpeed : c'est la seule facon
+     * de verifier la requete reelle, les en-tetes et les codes d'erreur sans
+     * depenser d'appel paye.
+     */
+    private String endpoint = WaveSpeed.LLM_URL;
+
     public LlmClient(String apiKey, String model) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.model = (model == null || model.trim().isEmpty())
                 ? WaveSpeed.DEFAULT_LLM_MODEL : model.trim();
+    }
+
+    /** Banc de test seulement : voir {@link #endpoint}. */
+    public LlmClient withEndpoint(String url) {
+        if (url != null && !url.trim().isEmpty()) {
+            this.endpoint = url.trim();
+        }
+        return this;
     }
 
     public LlmClient withMaxTokens(int tokens) {
@@ -49,6 +68,35 @@ public final class LlmClient implements Completer {
     @Override
     public Sanitizer.Shape shape() {
         return Sanitizer.Shape.OPENAI;
+    }
+
+    @Override
+    public String label() {
+        return model;
+    }
+
+    public String model() {
+        return model;
+    }
+
+    /**
+     * Catalogue reel du compte, par ordre alphabetique.
+     *
+     * Un identifiant de modele devine est la premiere cause de panne : il est
+     * sensible a la casse, porte un prefixe de vendeur, et le catalogue bouge.
+     * Autant demander la liste au fournisseur plutot que de l'ecrire en dur.
+     */
+    public static List<String> listModels(String apiKey) throws Exception {
+        return listModels(apiKey, WaveSpeed.MODELS_URL);
+    }
+
+    /** Banc de test seulement : meme lecture, depuis une autre URL. */
+    public static List<String> listModels(String apiKey, String url) throws Exception {
+        String key = apiKey == null ? "" : apiKey.trim();
+        if (key.isEmpty()) {
+            throw new Exception("aucune cle WaveSpeed configuree");
+        }
+        return WaveSpeed.parseModels(WaveSpeed.get(url, key));
     }
 
     /**
@@ -88,8 +136,7 @@ public final class LlmClient implements Completer {
     }
 
     private String post(String json) throws Exception {
-        HttpURLConnection conn =
-                (HttpURLConnection) new URL(WaveSpeed.LLM_URL).openConnection();
+        HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
         try {
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);

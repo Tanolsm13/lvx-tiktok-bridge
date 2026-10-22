@@ -186,11 +186,18 @@ public class CaptureService extends Service {
 
                     AiEngine engine = new AiEngine(client, cfg)
                             .withBudget(s.contextBudgetChars())
+                            .withFallback(fallbackChain(s))
+                            .withRescue(catalogueRescue(s))
                             .withProgress(new AiEngine.Progress() {
                                 @Override
                                 public void onRetry(int attempt, int total, String why) {
                                     Bus.status("Nouvelle tentative " + attempt + "/" + total
                                             + " (" + why + ")");
+                                }
+
+                                @Override
+                                public void onModelSwitch(String model, String why) {
+                                    Bus.status("Je passe a " + model + " (" + why + ")");
                                 }
                             });
                     AiEngine.Result result = log.isEmpty()
@@ -199,6 +206,9 @@ public class CaptureService extends Service {
 
                     if (result.isOk()) {
                         Bus.suggestions(result.variants);
+                        if (result.switched) {
+                            Bus.status("Repondu par " + result.model);
+                        }
                         int asked = cfg.count;
                         if (result.variants.size() < asked) {
                             // On le dit plutot que de laisser croire a une seule idee.
@@ -216,6 +226,57 @@ public class CaptureService extends Service {
                 }
             }
         });
+    }
+
+    /**
+     * Modeles de repli, prets a etre essayes apres le principal.
+     *
+     * Vide si le repli est desactive : on respecte alors le choix de modele a
+     * la lettre, meme si cela veut dire une erreur plutot qu'une reponse.
+     */
+    private static java.util.List<com.lvx.rpkeyboard.ai.Completer> fallbackChain(Settings s) {
+        java.util.List<com.lvx.rpkeyboard.ai.Completer> out =
+                new java.util.ArrayList<com.lvx.rpkeyboard.ai.Completer>();
+        if (!s.fallbackEnabled()) {
+            return out;
+        }
+        java.util.List<String> ids = s.fallbackModels();
+        for (int i = 0; i < ids.size(); i++) {
+            out.add(new LlmClient(s.apiKey(), ids.get(i)).withMaxTokens(s.maxTokens()));
+        }
+        return out;
+    }
+
+    /**
+     * Dernier recours : relire le catalogue WaveSpeed et y prendre un modele.
+     *
+     * Sert quand tous les modeles configures ont echoue pour une raison qui
+     * leur tient — identifiant disparu du catalogue, pas de vision, filtrage.
+     * C'est ce qui evite qu'une liste ecrite il y a six mois transforme un
+     * appui sur le bouton en « reponse vide ». Le catalogue lu est garde pour
+     * que les reglages puissent le proposer ensuite, meme hors ligne.
+     */
+    private static AiEngine.Rescue catalogueRescue(final Settings s) {
+        if (!s.fallbackEnabled()) {
+            return null;
+        }
+        return new AiEngine.Rescue() {
+            @Override
+            public java.util.List<com.lvx.rpkeyboard.ai.Completer> candidates(
+                    java.util.List<String> tried) throws Exception {
+                Bus.status("Je cherche un modele qui repond...");
+                java.util.List<String> catalogue = LlmClient.listModels(s.apiKey());
+                s.saveModelCatalogue(catalogue);
+                java.util.List<String> ids = com.lvx.rpkeyboard.ai.WaveSpeed
+                        .visionCandidates(catalogue, tried, 2);
+                java.util.List<com.lvx.rpkeyboard.ai.Completer> out =
+                        new java.util.ArrayList<com.lvx.rpkeyboard.ai.Completer>();
+                for (int i = 0; i < ids.size(); i++) {
+                    out.add(new LlmClient(s.apiKey(), ids.get(i)).withMaxTokens(s.maxTokens()));
+                }
+                return out;
+            }
+        };
     }
 
     /** Une seule image, puis on relache le display virtuel. */

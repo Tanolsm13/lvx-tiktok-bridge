@@ -17,10 +17,21 @@ public class RetryTest {
     /** Fournisseur simule : joue un scenario, sans reseau. */
     static final class Fake implements Completer {
         private final String[] script;
+        private final String name;
         int calls = 0;
 
         Fake(String... script) {
+            this("fake", script);
+        }
+
+        Fake(String name, String[] script) {
+            this.name = name;
             this.script = script;
+        }
+
+        @Override
+        public String label() {
+            return name;
         }
 
         @Override
@@ -137,6 +148,10 @@ public class RetryTest {
                         @Override
                         public void onRetry(int attempt, int total, String why) {
                             notified[0]++;
+                        }
+
+                        @Override
+                        public void onModelSwitch(String model, String why) {
                         }
                     })
                     .fromHistory(new ArrayList<com.lvx.rpkeyboard.ai.ChatMessage>());

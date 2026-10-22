@@ -1,7 +1,11 @@
 package com.lvx.rpkeyboard;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -25,6 +29,7 @@ import android.widget.Toast;
 
 import com.lvx.rpkeyboard.ai.AiEngine;
 import com.lvx.rpkeyboard.ai.ChatMessage;
+import com.lvx.rpkeyboard.ai.Completer;
 import com.lvx.rpkeyboard.ai.LlmClient;
 import com.lvx.rpkeyboard.ai.PromptBuilder;
 import com.lvx.rpkeyboard.ai.WaveSpeed;
@@ -50,6 +55,8 @@ public class SettingsActivity extends Activity {
     private EditText keyField;
     private EditText modelField;
     private EditText maxTokensField;
+    private EditText fallbackField;
+    private CheckBox fallbackBox;
     private Spinner modeSpinner;
     private EditText instructionField;
     private CheckBox roleplayBox;
@@ -125,8 +132,31 @@ public class SettingsActivity extends Activity {
         col.addView(label("Modele de texte"));
         modelField = field(cfg.model(), WaveSpeed.DEFAULT_LLM_MODEL, 1);
         col.addView(modelField);
-        col.addView(hint("Pour lire l'ecran il faut un modele a vision. Pistes : "
-                + join(WaveSpeed.VISION_MODELS)));
+        col.addView(hint("Pour lire l'ecran il faut un modele a vision. Les "
+                + "identifiants sont sensibles a la casse et portent un prefixe "
+                + "de vendeur. Pistes : " + join(WaveSpeed.VISION_MODELS)));
+        col.addView(spacer(dp(8)));
+        col.addView(action("Lister les modeles de mon compte", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                saveAll();
+                loadCatalogue();
+            }
+        }));
+        col.addView(hint("Va chercher le catalogue chez WaveSpeed : plus besoin de "
+                + "deviner un identifiant."));
+
+        col.addView(spacer(dp(12)));
+        fallbackBox = new CheckBox(this);
+        fallbackBox.setText("Repli automatique sur un autre modele");
+        fallbackBox.setTextColor(Color.parseColor(LABEL));
+        fallbackBox.setChecked(cfg.fallbackEnabled());
+        col.addView(fallbackBox);
+        col.addView(hint("Quand un modele refuse, se vide ou s'etrangle, l'app passe "
+                + "au suivant de la liste au lieu de te laisser sans reponse."));
+        fallbackField = field(commas(cfg.fallbackModels()),
+                commas(WaveSpeed.VISION_MODELS), 2);
+        col.addView(fallbackField);
 
         col.addView(spacer(dp(12)));
         col.addView(label("Longueur maximale de reponse (tokens)"));
@@ -345,6 +375,8 @@ public class SettingsActivity extends Activity {
     private void saveAll() {
         cfg.setApiKey(keyField.getText().toString());
         cfg.setModel(modelField.getText().toString());
+        cfg.setFallbackEnabled(fallbackBox.isChecked());
+        cfg.setFallbackModels(fallbackField.getText().toString());
         cfg.setMaxTokens(intOf(maxTokensField, 4000));
         cfg.setMode(modeSpinner.getSelectedItemPosition() == 0
                 ? PromptBuilder.Mode.ADAPTATIF
@@ -370,44 +402,267 @@ public class SettingsActivity extends Activity {
         refreshCtxHint();
     }
 
+    /**
+     * Diagnostic en deux temps, parce qu'un seul test ne dit pas ou ca casse.
+     *
+     * D'abord le texte : la cle, l'identifiant du modele et le reseau. Puis la
+     * vision, avec une image fabriquee ici qui porte un mot connu. Si le modele
+     * ne rend pas ce mot, il repond sans voir l'ecran — et c'est exactement ce
+     * qui produisait des propositions vides ou hors sujet en 3.0.
+     */
     private void ping() {
         pingResult.setTextColor(Color.parseColor(MUTED));
-        pingResult.setText("Test en cours...");
+        pingResult.setText("Test du texte...");
         final Handler ui = new Handler(Looper.getMainLooper());
         new Thread(new Runnable() {
             @Override
             public void run() {
-                String message;
-                boolean success = false;
-                try {
-                    PromptBuilder.Config c = cfg.config("");
-                    c.count = 1;
-                    AiEngine.Result r = new AiEngine(
-                            new LlmClient(cfg.apiKey(), cfg.model()).withMaxTokens(256), c)
-                            .fromHistory(new ArrayList<ChatMessage>());
-                    if (r.isOk()) {
-                        message = "OK — " + r.variants.get(0);
-                        if (message.length() > 160) {
-                            message = message.substring(0, 160) + "…";
-                        }
-                        success = true;
-                    } else {
-                        message = "Echec : " + r.error;
-                    }
-                } catch (Exception e) {
-                    message = "Echec : " + (e.getMessage() == null ? e.toString() : e.getMessage());
+                StringBuilder report = new StringBuilder();
+                boolean ok = textStage(report, ui);
+                if (ok) {
+                    ok = visionStage(report, ui);
                 }
-                final boolean ok = success;
-                final String shown = message;
-                ui.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        pingResult.setTextColor(Color.parseColor(ok ? "#7AD6A0" : "#E2777A"));
-                        pingResult.setText(shown);
-                    }
-                });
+                show(ui, report.toString(), ok);
             }
         }).start();
+    }
+
+    /** Premier temps : un aller-retour de texte, sans image. */
+    private boolean textStage(StringBuilder report, Handler ui) {
+        try {
+            PromptBuilder.Config c = cfg.config(
+                    "Ignore tout le reste et reponds uniquement par le mot : PRET");
+            c.count = 1;
+            AiEngine.Result r = engineFor(c).fromHistory(new ArrayList<ChatMessage>());
+            if (!r.isOk()) {
+                report.append("Texte : echec.\n").append(r.error);
+                if (!r.model.isEmpty()) {
+                    report.append("\nDernier modele essaye : ").append(r.model);
+                }
+                return false;
+            }
+            report.append("Texte : OK");
+            if (r.switched) {
+                report.append(" — mais c'est ").append(r.model)
+                        .append(" qui a repondu, pas ").append(cfg.model());
+            }
+            report.append(".\n");
+            return true;
+        } catch (Exception e) {
+            report.append("Texte : echec.\n").append(msg(e));
+            return false;
+        }
+    }
+
+    /** Second temps : une image fabriquee, pour verifier que le modele voit. */
+    private boolean visionStage(StringBuilder report, Handler ui) {
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                pingResult.setText("Test de la vision...");
+            }
+        });
+        try {
+            PromptBuilder.Config c = cfg.config(
+                    "Ignore la consigne de jeu de role. Il n'y a pas de conversation "
+                            + "dans cette image : un seul mot y est ecrit en gros. "
+                            + "Reponds uniquement par ce mot, en majuscules.");
+            c.count = 1;
+            AiEngine.Result r = engineFor(c).fromScreenshot(testJpeg(VISION_WORD));
+            if (!r.isOk()) {
+                report.append("Vision : echec.\n").append(r.error);
+                if (!r.model.isEmpty()) {
+                    report.append("\nDernier modele essaye : ").append(r.model);
+                }
+                return false;
+            }
+            String answer = r.variants.get(0);
+            boolean saw = answer.toUpperCase(java.util.Locale.ROOT).contains(VISION_WORD);
+            if (saw) {
+                report.append("Vision : OK, le modele lit bien l'image");
+                if (r.switched) {
+                    report.append(" (par ").append(r.model).append(')');
+                }
+                report.append('.');
+                return true;
+            }
+            report.append("Vision : le modele repond mais ne lit pas l'image.\n")
+                    .append("Attendu ").append(VISION_WORD).append(", recu : ")
+                    .append(cut(answer, 90))
+                    .append("\nPrends un modele marque Vision, par exemple ")
+                    .append(WaveSpeed.VISION_MODELS[0]).append('.');
+            return false;
+        } catch (Exception e) {
+            report.append("Vision : echec.\n").append(msg(e));
+            return false;
+        }
+    }
+
+    /** Mot temoin du test de vision : court, sans accent, improbable au hasard. */
+    private static final String VISION_WORD = "MANGUE";
+
+    /** Meme chaine de modeles que le clavier, pour tester ce qui sert vraiment. */
+    private AiEngine engineFor(PromptBuilder.Config c) {
+        List<Completer> others = new ArrayList<Completer>();
+        if (cfg.fallbackEnabled()) {
+            List<String> ids = cfg.fallbackModels();
+            for (int i = 0; i < ids.size(); i++) {
+                others.add(new LlmClient(cfg.apiKey(), ids.get(i)).withMaxTokens(900));
+            }
+        }
+        return new AiEngine(new LlmClient(cfg.apiKey(), cfg.model()).withMaxTokens(900), c)
+                .withBudget(cfg.contextBudgetChars())
+                .withFallback(others)
+                .withRescue(cfg.fallbackEnabled() ? rescue() : null);
+    }
+
+    /**
+     * Le meme dernier recours que le clavier : un modele pris au catalogue.
+     *
+     * Le test doit dire ce qui se passera pour de vrai. S'il se limitait aux
+     * modeles ecrits dans les reglages, il annoncerait un echec la ou le
+     * clavier, lui, trouverait quand meme de quoi repondre.
+     */
+    private AiEngine.Rescue rescue() {
+        return new AiEngine.Rescue() {
+            @Override
+            public List<Completer> candidates(List<String> tried) throws Exception {
+                List<String> catalogue = LlmClient.listModels(cfg.apiKey());
+                cfg.saveModelCatalogue(catalogue);
+                List<Completer> out = new ArrayList<Completer>();
+                List<String> ids = WaveSpeed.visionCandidates(catalogue, tried, 2);
+                for (int i = 0; i < ids.size(); i++) {
+                    out.add(new LlmClient(cfg.apiKey(), ids.get(i)).withMaxTokens(900));
+                }
+                return out;
+            }
+        };
+    }
+
+    /**
+     * Une image JPEG portant un mot, fabriquee sur l'appareil.
+     *
+     * Elle remplace la capture d'ecran le temps du test : aucune autorisation
+     * a demander, et le resultat attendu est connu d'avance.
+     */
+    private static byte[] testJpeg(String word) {
+        Bitmap bmp = Bitmap.createBitmap(640, 320, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bmp);
+        canvas.drawColor(Color.WHITE);
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setAntiAlias(true);
+        paint.setColor(Color.BLACK);
+        paint.setTextSize(96);
+        paint.setTextAlign(android.graphics.Paint.Align.CENTER);
+        canvas.drawText(word, 320, 190, paint);
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        bmp.compress(Bitmap.CompressFormat.JPEG, 92, bos);
+        bmp.recycle();
+        return bos.toByteArray();
+    }
+
+    /**
+     * Demande a WaveSpeed la liste des modeles du compte.
+     *
+     * Un identifiant invente rend une 404 et, pire, un identifiant proche mais
+     * sans vision rend des reponses vides. Autant lire le catalogue.
+     */
+    private void loadCatalogue() {
+        pingResult.setTextColor(Color.parseColor(MUTED));
+        pingResult.setText("Lecture du catalogue...");
+        final Handler ui = new Handler(Looper.getMainLooper());
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final List<String> ids = LlmClient.listModels(cfg.apiKey());
+                    if (ids.isEmpty()) {
+                        show(ui, "Le compte ne renvoie aucun modele.", false);
+                        return;
+                    }
+                    cfg.saveModelCatalogue(ids);
+                    ui.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            pingResult.setTextColor(Color.parseColor(MUTED));
+                            pingResult.setText(ids.size() + " modeles disponibles.");
+                            pickModel(ids);
+                        }
+                    });
+                } catch (Exception e) {
+                    List<String> cached = cfg.modelCatalogue();
+                    if (cached.isEmpty()) {
+                        show(ui, "Catalogue illisible : " + msg(e), false);
+                        return;
+                    }
+                    final List<String> shown = cached;
+                    final String why = msg(e);
+                    ui.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            pingResult.setTextColor(Color.parseColor("#E2777A"));
+                            pingResult.setText("Catalogue hors ligne (" + why
+                                    + ") : liste de la derniere fois.");
+                            pickModel(shown);
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    /** Choix du modele principal dans la liste, avec marquage des pistes vision. */
+    private void pickModel(final List<String> ids) {
+        final String[] items = new String[ids.size()];
+        for (int i = 0; i < ids.size(); i++) {
+            String id = ids.get(i);
+            items[i] = looksVisual(id) ? id + "  (vision ?)" : id;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Modele de texte")
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        modelField.setText(ids.get(which));
+                        cfg.setModel(ids.get(which));
+                        Toast.makeText(SettingsActivity.this,
+                                ids.get(which), Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("Annuler", null)
+                .show();
+    }
+
+    /**
+     * Indice, pas verdict : le nom suggere un modele a vision.
+     *
+     * L'API ne dit pas quelles entrees lisent une image, donc on signale une
+     * piste plutot que de laisser une liste nue. Le test de vision tranche.
+     * Meme regle que celle du clavier quand il doit se rabattre tout seul sur
+     * un modele du catalogue : un seul endroit, un seul comportement.
+     */
+    static boolean looksVisual(String id) {
+        return WaveSpeed.looksVisual(id);
+    }
+
+    private void show(Handler ui, final String text, final boolean ok) {
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                pingResult.setTextColor(Color.parseColor(ok ? "#7AD6A0" : "#E2777A"));
+                pingResult.setText(text);
+            }
+        });
+    }
+
+    private static String msg(Exception e) {
+        String m = e.getMessage();
+        return (m == null || m.trim().isEmpty()) ? e.toString() : m;
+    }
+
+    private static String cut(String s, int max) {
+        String one = s.replace("\n", " ").trim();
+        return one.length() <= max ? one : one.substring(0, max) + "…";
     }
 
     @Override
@@ -571,6 +826,22 @@ public class SettingsActivity extends Activity {
         d.setColor(Color.parseColor(color));
         d.setCornerRadius(dp(10));
         return d;
+    }
+
+    /** Pour un champ : virgules, c'est ce que le parseur attend en premier. */
+    private static String commas(List<String> values) {
+        return commas(values.toArray(new String[0]));
+    }
+
+    private static String commas(String[] values) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < values.length; i++) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append(values[i]);
+        }
+        return sb.toString();
     }
 
     private static String join(String[] values) {
